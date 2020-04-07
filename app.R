@@ -1,77 +1,88 @@
-
+# This is a dashboard designed to pull current coronavirus stats and report on them
 library(tidyverse)
 library(jsonlite)
 library(httr)
 library(shiny)
-library(config)
-configs<-config::get()
-path <- "https://covid19-tracker.p.rapidapi.com/statistics/US"
-request <- GET(url = path,
-               add_headers(	"x-rapidapi-host"= configs$host,
-                            "x-rapidapi-key"= configs$key)
-)
-response <- content(request, as = "text", encoding = "UTF-8")
-df <- fromJSON(response, flatten = TRUE) %>%
-    data.frame()
+library(shinydashboard)
 
-# Define UI for application that reports data from a coronavirus API
-ui <- fluidPage(
+
+# UI ####
+ui <- dashboardPage(
 
     # Application title
-    titlePanel("Corona Virus Tracker"),
+    dashboardHeader(
+        title="Corona Virus Tracker"
+    ),
 
     # Sidebar for filtering
-    sidebarLayout(
-        sidebarPanel(
-            selectInput("state_box",
-                        "Select State:",
-                        choices=sort(unique(df$stats.state)),
-                        multiple=T),
-            selectInput("county_box",
-                        "Select County:",
-                        choices=sort(unique(df$stats.province)),
-                        multiple=T)
+    dashboardSidebar(
+        sidebarMenu(
+            menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+            menuItem("Charts", tabName="charts",icon = icon("line-chart"))
         ),
-
-        # Show a table that reports total stats for the selected areas
-        mainPanel(
-           tableOutput("corona_table")
+        uiOutput("state_filter")
+    ),
+    # Show a table that reports total stats for the selected areas
+    dashboardBody(
+        tabItems(
+            tabItem("dashboard",
+                    tableOutput("corona_table")
+            ),
+            tabItem("charts",
+                    plotOutput("corona_trend")
+            )
         )
     )
+    
 )
 
-# Define server logic required to draw a histogram
+# SERVER ####
 server <- function(input, output,session) {
-
-    observeEvent(input$state_box,{
-        cities<-df %>%
-            filter(stats.state %in% input$state_box |
-                       is.null(input$state_box)) %>%
-            distinct(stats.province) %>%
-            arrange(stats.province)
-        updateSelectInput(session,
-                          "county_box",
-                          "Select County",
-                          choices=cities[1])
+    # 1. Query API ####
+    path <- "https://covidtracking.com/api/v1/states/daily.json"
+    request <- GET(url = path
+    )
+    response <- content(request, as = "text", encoding = "UTF-8")
+    df <- fromJSON(response, flatten = TRUE) %>%
+        data.frame()
+    df$state_name<-state.name[match(df$state,state.abb)]
+    df$date<-as.Date(as.character(df$date),format="%Y%m%d")
+    # 2. Filters for user ####
+    output$state_filter<-renderUI({
+        selectInput("state_box",
+                    "Select State:",
+                    choices=sort(unique(df$state_name)),
+                    selected = "Ohio",
+                    multiple=T)
+        
     })
     
+    
+    # 3. Create totals table ####
     output$corona_table <- renderTable({
+        curr_date <- max(df$date, na.rm = T)
         df %>%
-            filter(
-                stats.state %in% input$state_box | is.null(input$state_box),
-                stats.province %in% input$county_box | is.null(input$county_box)
-            ) %>%
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   date == curr_date) %>%
             ungroup() %>%
             summarise_at(
-                vars(stats.latest.confirmed,
-                     stats.latest.deaths,
-                     stats.latest.recovered),
+                vars(positive,
+                     death,
+                     recovered),
                 sum,
                 na.rm = TRUE
             ) %>% 
-            rename("Total Confirmed Cases"="stats.latest.confirmed",
-                   "Total Deaths"="stats.latest.deaths",
-                   "Total Recovered"="stats.latest.recovered")
+            rename("Total Confirmed Cases"="positive",
+                   "Total Deaths"="death",
+                   "Total Recovered"="recovered")
+    })
+    
+    output$corona_trend<-renderPlot({
+        filter_data<-df %>%
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box))
+        ggplot(filter_data) +geom_line(aes(date,positive,group=state_name))
     })
 }
 
