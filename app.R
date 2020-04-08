@@ -9,8 +9,14 @@ library(shinydashboard)
 Proper<-function(x){
     translate<-NULL
     translate<-state.name
-    names(translate)<-state.abb
+    names(translate)<-tolower(state.abb)
     translate<-c(translate,
+                 "as"="American Samoa",
+                 "dc"="District of Columbia",
+                 "gu"="Guam",
+                 "mp"="Northern Mariana Islands",
+                 "pr"="Puerto Rico",
+                 "vi"="US Virgin Islands",
                  "positive"="Total Confirmed Cases",
                  "negative"="Total Negative Tests",
                  "death"="Total Deaths",
@@ -39,38 +45,52 @@ ui <- dashboardPage(
     # Sidebar for filtering
     dashboardSidebar(
         sidebarMenu(
-            menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
-            menuItem("Charts", tabName="charts",icon = icon("line-chart"))
+            menuItem("General Info", tabName="state_chart",icon = icon("line-chart")),
+            menuItem("Stay At Home Impact", tabName="expo_chart",icon = icon("line-chart"))
         ),
-        uiOutput("state_filter")
+        uiOutput("state_filter"),
+        radioButtons(
+            "scale_box",
+            "Choose Scale:",
+            choices = c("Standard", "Log"),
+            selected = "Standard"
+        ),
+        radioButtons(
+            "time_box",
+            "Select Time measure:",
+            choices = c("Absolute" = "date", "Relative" =
+                            "days_since")
+        ),
+        radioButtons(
+            "metric_box",
+            "Choose metric:",
+            choices = c(
+                "Total Confirmed Cases" = "positive",
+                "Total Negative Tests" = "negative",
+                "Total Deaths" = "death",
+                "Total Recovered" = "recovered",
+                "New Confirmed Cases" = "positiveIncrease",
+                "New Negative Tests" = "negativeIncrease",
+                "New Deaths" = "deathIncrease"
+            ),
+            selected = "positive"
+        )
+        
     ),
     # Show a table that reports total stats for the selected areas
     dashboardBody(
         tabItems(
-            tabItem("dashboard",
-                    tableOutput("corona_table")
+            tabItem("state_chart",
+                    tableOutput("corona_table"),
+                    plotOutput("corona_trend")
+                    
             ),
-            tabItem("charts",
-                    plotOutput("corona_trend"),
-                    fluidRow(
-                        column(2,radioButtons("scale_box",
-                                     "Choose Scale:",
-                                     choices = c("Standard","Log"),
-                                     selected="Standard")),
-                        column(2,radioButtons("time_box",
-                                              "Select Time measure:",
-                                              choices=c("Absolute"="date","Relative"="days_since"))),
-                        column(8,radioButtons("metric_box",
-                                     "Choose metric:",
-                                     choices=c("Total Confirmed Cases"="positive",
-                                               "Total Negative Tests"="negative",
-                                               "Total Deaths"="death",
-                                               "Total Recovered"="recovered",
-                                               "New Confirmed Cases"="positiveIncrease",
-                                               "New Negative Tests"="negativeIncrease",
-                                               "New Deaths"="deathIncrease"),
-                                     selected="positive"))
-                    )
+            tabItem("expo_chart",
+                    HTML("Exponential model is built using data prior to April. By this point, most Americans were under stay at home orders, causing slower growth. <br>
+                         Model fit can best be seen by looking at the logarithmic scale. Fit measures to be added in future release.<br>
+                         Notes: reporting data accuracy is a concern, exponential growth is a worse case scenario and serves as an upper bound<br>"),
+                    tableOutput("expo_table"),
+                    plotOutput("expo_trend")
             )
         )
     )
@@ -85,16 +105,9 @@ server <- function(input, output,session) {
     )
     response <- content(request, as = "text", encoding = "UTF-8")
     df <- fromJSON(response, flatten = TRUE) %>% data.frame()
-    
-    abbs<-c(state.abb,'AS','DC','GU','MP','PR','VI')
-    s_names<-c(state.name,
-               'American Samoa',
-               'District of Columbia',
-               'Guam',
-               'Northern Mariana Islands',
-               'Puerto Rico',
-               'US Virgin Islands')
-    df$state_name<-s_names[match(df$state,abbs)]
+    df[is.na(df)]<-0
+
+    df$state_name<-Proper(df$state)
     
     df$date<-as.Date(as.character(df$date),format="%Y%m%d")
     
@@ -102,8 +115,18 @@ server <- function(input, output,session) {
         filter(positive>0) %>% 
         group_by(state) %>% 
         summarize(first_date=min(date))
+
     df<-df %>% left_join(first_date) %>% 
         mutate(days_since=as.integer(date-first_date))
+    
+    first_case<-reactive({
+        (df %>% 
+             filter(positive>0,
+                    state_name %in% input$state_box |
+                        is.null(input$state_box)) %>% 
+             ungroup() %>% 
+             summarize(first_date=min(date)))[[1]]
+    })
     
     # 2. Filters for user ####
     output$state_filter<-renderUI({
@@ -144,8 +167,7 @@ server <- function(input, output,session) {
                      negative,
                      death,
                      recovered),
-                sum,
-                na.rm = TRUE
+                function(x) as.integer(sum(x,na.rm = TRUE))
             ) %>% 
             rename("Total Confirmed Cases"="positive",
                    "Total Negative Tests"="negative",
@@ -153,7 +175,7 @@ server <- function(input, output,session) {
                    "Total Recovered"="recovered")
     })
     
-    # 4. Create trend chart
+    # 4. Create trend chart ####
     output$corona_trend<-renderPlot({
         filter_data<-df %>%
             filter(state_name %in% input$state_box |
@@ -163,6 +185,68 @@ server <- function(input, output,session) {
         
         p<-ggplot(filter_data) +geom_line(aes(time,value,color=state_name)) +
             labs(x=Proper(input$time_box),
+                 y=Proper(input$metric_box),
+                 title=paste(Proper(input$metric_box),"over Time"),
+                 color="State")
+        
+        if(input$scale_box=="Log"){
+            p + 
+                scale_y_log10()
+        }
+        else p
+    })
+    
+    # 5. Create exp model ####
+    model_data<-reactive({
+
+        
+        filter_data<-df %>%
+            mutate(value=!!sym(input$metric_box),
+                   days_since=as.integer(date-first_case()))%>% 
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   value>0,
+                   date<as.Date("2020-03-29")) %>% 
+            group_by(days_since) %>% summarize(value=sum(value)) %>% 
+            select(days_since,value)
+        #generate model for exponential growth prior to stay at home order impact
+        coefs<-lm(log(filter_data$value)~filter_data$days_since)[[1]]
+    })
+    
+    # 6. Create log comparison table ####
+    output$expo_table <- renderTable({
+        curr_date <- max(df$date, na.rm = T)
+        days_since<-as.integer(curr_date-first_case())
+        table0<-df %>% 
+            mutate(value=!!sym(input$metric_box)) %>% 
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   date == curr_date) %>%
+            ungroup() %>%
+            summarize(value=sum(value))
+        actual_val<-as.integer(table0[[1]])
+        expect_val<-as.integer(exp(model_data()[[2]]*days_since+model_data()[[1]]))
+        difference<-actual_val-expect_val
+        prct_diff<-scales::percent( actual_val/expect_val-1)
+        table1<-data.frame(actual_val,expect_val,difference,prct_diff)
+        names(table1)<-c(Proper(input$metric_box),"Expected value","Observed Difference","Percent Difference")
+        table1
+    })
+
+    # 7. Create log comparison chart ####
+    output$expo_trend<-renderPlot({
+        #filter data first
+        filter_data<-df %>%
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   positive>0) %>% 
+            mutate(value=!!sym(input$metric_box),
+                   days_since=as.integer(date-first_case())) %>% 
+            group_by(days_since) %>% summarize(value=sum(value))
+        View(filter_data)
+        p<-ggplot(filter_data) +geom_line(aes(days_since,value),color="Red") +
+            geom_line(aes(days_since,exp(model_data()[[2]]*days_since+model_data()[[1]]))) +
+            labs(x='Days Since First Occurence',
                  y=Proper(input$metric_box),
                  title=paste(Proper(input$metric_box),"over Time"),
                  color="State")
