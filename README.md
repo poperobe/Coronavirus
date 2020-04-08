@@ -1,3 +1,3 @@
 README
-Information about the data source can be found [here] (https://rapidapi.com/alitugrulcebe/api/covid19-tracker?endpoint=apiendpoint_34906bc1-7c2e-4e3d-9ff7-895cb50abcaa)
-This API is limited to 50 queries a day. Until a higher capacity API is used, the API must be used outside the server function
+Information about the data source can be found [here] (https://covidtracking.com/api)
+This app is not currently in production. To run this app, clone it to a location local to your RStudio, and open it with RStudio.
