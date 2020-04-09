@@ -86,9 +86,9 @@ ui <- dashboardPage(
                     
             ),
             tabItem("expo_chart",
-                    HTML("Exponential model is built using data prior to April. By this point, most Americans were under stay at home orders, causing slower growth. <br>
+                    HTML("The exponential model is built using daily infection rates prior to April. By the end of March, most Americans were under stay at home orders, causing slower growth. <br>
                          Model fit can best be seen by looking at the logarithmic scale. Fit measures to be added in future release.<br>
-                         Notes: reporting data accuracy is a concern, exponential growth is a worse case scenario and serves as an upper bound<br>"),
+                         Notes: reporting data accuracy is a concern, exponential growth is a worst case scenario and serves as an upper bound<br>"),
                     tableOutput("expo_table"),
                     plotOutput("expo_trend")
             )
@@ -241,11 +241,12 @@ server <- function(input, output,session) {
                        is.null(input$state_box),
                    positive>0) %>% 
             mutate(value=!!sym(input$metric_box),
-                   days_since=as.integer(date-first_case())) %>% 
-            group_by(days_since) %>% summarize(value=sum(value))
-        View(filter_data)
-        p<-ggplot(filter_data) +geom_line(aes(days_since,value),color="Red") +
-            geom_line(aes(days_since,exp(model_data()[[2]]*days_since+model_data()[[1]]))) +
+                   days_since=as.integer(date-first_case()),
+                   time=!!sym(input$time_box)) %>% 
+            group_by(days_since,time) %>% summarize(value=sum(value))
+        
+        p<-ggplot(filter_data) +geom_line(aes(time,value),color="Red") +
+            geom_line(aes(time,exp(model_data()[[2]]*days_since+model_data()[[1]]))) +
             labs(x='Days Since First Occurence',
                  y=Proper(input$metric_box),
                  title=paste(Proper(input$metric_box),"over Time"),
