@@ -5,6 +5,6 @@ account: poperobe
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 2084494
-bundleId: 2989594
+bundleId: 2989654
 url: https://poperobe.shinyapps.io/coronavirus/
-when: 1586391386.55133
+when: 1586392505.22477

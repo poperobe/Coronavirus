@@ -25,7 +25,7 @@ Proper<-function(x){
                  "negativeincrease"="New Negative Tests",
                  "deathincrease"="New Deaths",
                  "date"="Date",
-                 "days_since"="Days Since First Case"
+                 "days_since"="Days Since First Occurrence"
                  )
     sapply(x,function(y){
         if(is.na(translate[tolower(y)]))y
@@ -48,7 +48,13 @@ ui <- dashboardPage(
             menuItem("General Info", tabName="state_chart",icon = icon("line-chart")),
             menuItem("Stay At Home Impact", tabName="expo_chart",icon = icon("line-chart"))
         ),
-        uiOutput("state_filter"),
+        selectInput(
+            "state_box",
+            "Select State:",
+            choices = "Ohio",
+            selected = "Ohio",
+            multiple = T
+        ), 
         radioButtons(
             "scale_box",
             "Choose Scale:",
@@ -121,7 +127,7 @@ server <- function(input, output,session) {
     
     first_case<-reactive({
         (df %>% 
-             filter(positive>0,
+             filter(eval(sym(input$metric_box))>0,
                     state_name %in% input$state_box |
                         is.null(input$state_box)) %>% 
              ungroup() %>% 
@@ -129,14 +135,16 @@ server <- function(input, output,session) {
     })
     
     # 2. Filters for user ####
-    output$state_filter<-renderUI({
-        selectInput("state_box",
-                    "Select State:",
-                    choices=sort(unique(df$state_name)),
-                    selected = "Ohio",
-                    multiple=T)
+    # output$state_filter<-renderUI({
+    updateSelectInput(
+        session,
+        "state_box",
+        "Select State:",
+        choices = sort(unique(df$state_name)),
+        selected = "Ohio"
+    )
         
-    })
+    # })
     
     # 2. Create Date notification ####
     output$date_notif <- renderMenu({
@@ -206,7 +214,7 @@ server <- function(input, output,session) {
             filter(state_name %in% input$state_box |
                        is.null(input$state_box),
                    value>0,
-                   date<as.Date("2020-03-29")) %>% 
+                   date<as.Date("2020-04-01")) %>% 
             group_by(days_since) %>% summarize(value=sum(value)) %>% 
             select(days_since,value)
         #generate model for exponential growth prior to stay at home order impact
@@ -247,7 +255,7 @@ server <- function(input, output,session) {
         
         p<-ggplot(filter_data) +geom_line(aes(time,value),color="Red") +
             geom_line(aes(time,exp(model_data()[[2]]*days_since+model_data()[[1]]))) +
-            labs(x='Days Since First Occurence',
+            labs(x=Proper(input$time_box),
                  y=Proper(input$metric_box),
                  title=paste(Proper(input$metric_box),"over Time"),
                  color="State")
