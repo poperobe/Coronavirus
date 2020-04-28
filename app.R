@@ -46,7 +46,8 @@ ui <- dashboardPage(
     dashboardSidebar(
         sidebarMenu(
             menuItem("General Info", tabName="state_chart",icon = icon("line-chart")),
-            menuItem("Stay At Home Impact", tabName="expo_chart",icon = icon("line-chart"))
+            menuItem("Stay At Home Impact", tabName="expo_chart",icon = icon("line-chart")),
+            menuItem("Forecast", tabName="forecast_chart",icon = icon("line-chart"))
         ),
         selectInput(
             "state_box",
@@ -92,11 +93,20 @@ ui <- dashboardPage(
                     
             ),
             tabItem("expo_chart",
-                    HTML("The exponential model is built using daily infection rates prior to April. By the end of March, most Americans were under stay at home orders, causing slower growth. <br>
-                         Model fit can best be seen by looking at the logarithmic scale. Fit measures to be added in future release.<br>
-                         Notes: reporting data accuracy is a concern, exponential growth is a worst case scenario and serves as an upper bound<br>"),
                     tableOutput("expo_table"),
-                    plotOutput("expo_trend")
+                    plotOutput("expo_trend"),
+                    HTML("By the end of March, most Americans were under stay at home orders, causing COVID-19 to spread much slower. 
+                    This graph shows what could have happened if the virus continued to spread unopposed just one more week.
+                    <br>Just one more week of exponential growth could have results in up to ten times more infected people. 
+                    <br>Model fit can best be seen by looking at the logarithmic scale. Fit measures to be added in future release.<br>")
+                    
+            ),
+            tabItem("forecast_chart",
+                    tableOutput("forecast_table"),
+                    plotOutput("forecast_trend"),
+                    HTML("Since the start of April, the trends for most every category appears linear, implying the virus has begun to spread at a linear rate.
+                         Indeed, when looking at the new confirmed cases over this time period, the rate has barely changed at all.<br>")
+                    
             )
         )
     )
@@ -116,14 +126,6 @@ server <- function(input, output,session) {
     df$state_name<-Proper(df$state)
     
     df$date<-as.Date(as.character(df$date),format="%Y%m%d")
-    
-    first_date<-df %>% 
-        filter(positive>0) %>% 
-        group_by(state) %>% 
-        summarize(first_date=min(date))
-
-    df<-df %>% left_join(first_date) %>% 
-        mutate(days_since=as.integer(date-first_date))
     
     first_case<-reactive({
         (df %>% 
@@ -152,7 +154,7 @@ server <- function(input, output,session) {
             type = "notifications",
             icon = icon("calendar"),
             badgeStatus = NULL,
-            headerText = "Data date range:",
+            headerText = HTML("<b>Data date range:</b>"),
             notificationItem(HTML(paste0(
                 min(df$date, na.rm = T),
                 "<br>through<br>",
@@ -185,11 +187,19 @@ server <- function(input, output,session) {
     
     # 4. Create trend chart ####
     output$corona_trend<-renderPlot({
-        filter_data<-df %>%
+        
+        first_date<-df %>% 
+            filter(eval(sym(input$metric_box))>0) %>% 
+            group_by(state) %>% 
+            summarize(first_date=min(date))
+
+        filter_data<-df %>% left_join(first_date) %>% 
+            mutate(days_since=as.integer(date-first_date),
+                   value=!!sym(input$metric_box),
+                   time=!!sym(input$time_box)) %>%
             filter(state_name %in% input$state_box |
-                       is.null(input$state_box)) %>% 
-            mutate(value=!!sym(input$metric_box),
-                   time=!!sym(input$time_box))
+                       is.null(input$state_box),
+                   days_since>=0)
         
         p<-ggplot(filter_data) +geom_line(aes(time,value,color=state_name)) +
             labs(x=Proper(input$time_box),
@@ -198,8 +208,7 @@ server <- function(input, output,session) {
                  color="State")
         
         if(input$scale_box=="Log"){
-            p + 
-                scale_y_log10()
+            p + scale_y_log10()
         }
         else p
     })
@@ -223,13 +232,13 @@ server <- function(input, output,session) {
     
     # 6. Create log comparison table ####
     output$expo_table <- renderTable({
-        curr_date <- max(df$date, na.rm = T)
+        curr_date <- as.Date("2020-04-07")
         days_since<-as.integer(curr_date-first_case())
         table0<-df %>% 
             mutate(value=!!sym(input$metric_box)) %>% 
             filter(state_name %in% input$state_box |
                        is.null(input$state_box),
-                   date == curr_date) %>%
+                   date==curr_date) %>%
             ungroup() %>%
             summarize(value=sum(value))
         actual_val<-as.integer(table0[[1]])
@@ -244,13 +253,14 @@ server <- function(input, output,session) {
     # 7. Create log comparison chart ####
     output$expo_trend<-renderPlot({
         #filter data first
-        filter_data<-df %>%
-            filter(state_name %in% input$state_box |
-                       is.null(input$state_box),
-                   positive>0) %>% 
+        filter_data<-df %>% 
             mutate(value=!!sym(input$metric_box),
                    days_since=as.integer(date-first_case()),
-                   time=!!sym(input$time_box)) %>% 
+                   time=!!sym(input$time_box))  %>%
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   date<=as.Date("2020-04-07"),
+                   positive>0)%>% 
             group_by(days_since,time) %>% summarize(value=sum(value))
         
         p<-ggplot(filter_data) +geom_line(aes(time,value),color="Red") +
@@ -266,6 +276,69 @@ server <- function(input, output,session) {
         }
         else p
     })
+    
+    # 8. Create new model ####
+    new_model_data<-reactive({
+        
+        
+        filter_data<-df %>%
+            mutate(value=!!sym(input$metric_box),
+                   days_since=as.integer(date-first_case()))%>% 
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   value>0,
+                   date>=as.Date("2020-04-01")) %>% 
+            group_by(days_since) %>% summarize(value=sum(value)) %>% 
+            select(days_since,value)
+        #generate model for linear growth after stay at home order impact
+        coefs<-lm(filter_data$value~filter_data$days_since)[[1]]
+    })
+    
+    # 9. Create comparison table ####
+    output$forecast_table <- renderTable({
+        curr_date <- max(df$date,na.rm=T)
+        days_since<-as.integer(curr_date-first_case())
+        table0<-df %>% 
+            mutate(value=!!sym(input$metric_box)) %>% 
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   date==curr_date) %>%
+            ungroup() %>%
+            summarize(value=sum(value))
+        expect_val<-as.integer(new_model_data()[[2]]*(days_since+7)+new_model_data()[[1]])
+        table1<-data.frame(expect_val)
+        names(table1)<-paste("Expected",Proper(input$metric_box),"next week")
+        table1
+    })
+    
+    # 10. Create log comparison chart ####
+    output$forecast_trend<-renderPlot({
+        #filter data first
+        filter_data<-df %>% 
+            mutate(value=!!sym(input$metric_box),
+                   days_since=as.integer(date-first_case()),
+                   time=!!sym(input$time_box))  %>%
+            filter(state_name %in% input$state_box |
+                       is.null(input$state_box),
+                   date>=as.Date("2020-04-01"),
+                   positive>0)%>% 
+            group_by(days_since,time) %>% summarize(value=sum(value))
+        
+        p<-ggplot(filter_data) +geom_line(aes(time,value),color="Red") +
+            geom_line(aes(time,new_model_data()[[2]]*days_since+new_model_data()[[1]])) +
+            labs(x=Proper(input$time_box),
+                 y=Proper(input$metric_box),
+                 title=paste(Proper(input$metric_box),"over Time"),
+                 color="State")
+        
+        if(input$scale_box=="Log"){
+            p + 
+                scale_y_log10()
+        }
+        else p
+    })
+    
+    
 }
 
 # Run the application 
