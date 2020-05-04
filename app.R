@@ -4,6 +4,13 @@ library(jsonlite)
 library(httr)
 library(shiny)
 library(shinydashboard)
+library(leaflet)
+library(geojsonio)
+
+
+geo_states<-geojsonio::geojson_read(x = "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
+                                    , what = "sp")
+
 
 # Function to convert variable names to display names
 Proper<-function(x){
@@ -47,7 +54,7 @@ ui <- dashboardPage(
         sidebarMenu(
             menuItem("General Info", tabName="state_chart",icon = icon("line-chart")),
             menuItem("Stay At Home Impact", tabName="expo_chart",icon = icon("line-chart")),
-            menuItem("Forecast", tabName="forecast_chart",icon = icon("line-chart"))
+            menuItem("April Summary", tabName="stay_at_home_chart",icon = icon("line-chart"))
         ),
         selectInput(
             "state_box",
@@ -101,11 +108,12 @@ ui <- dashboardPage(
                     <br>Model fit can best be seen by looking at the logarithmic scale. Fit measures to be added in future release.<br>")
                     
             ),
-            tabItem("forecast_chart",
-                    tableOutput("forecast_table"),
-                    plotOutput("forecast_trend"),
-                    HTML("Since the start of April, the trends for most every category appears linear, implying the virus has begun to spread at a linear rate.
-                         Indeed, when looking at the new confirmed cases over this time period, the rate has barely changed at all.<br>")
+            tabItem("stay_at_home_chart",
+                    leafletOutput("corona_map"),
+                    HTML("In the month of April, the trends for most every category appears linear, implying the virus has begun to spread at a linear rate.
+                         Indeed, when looking at the new confirmed cases over this time period, the growth rate has barely changed.<br>
+                         At the beginning of May, most states began to loosen restrictions, allowing people to more freely interact. Expect the growth rate to rise again."),
+                    plotOutput("forecast_trend")
                     
             )
         )
@@ -137,7 +145,7 @@ server <- function(input, output,session) {
     })
     
     # 2. Filters for user ####
-    # output$state_filter<-renderUI({
+
     updateSelectInput(
         session,
         "state_box",
@@ -146,7 +154,6 @@ server <- function(input, output,session) {
         selected = "Ohio"
     )
         
-    # })
     
     # 2. Create Date notification ####
     output$date_notif <- renderMenu({
@@ -212,6 +219,55 @@ server <- function(input, output,session) {
         }
         else p
     })
+
+    # 5. Create Map
+    output$corona_map<-renderLeaflet({
+
+        
+        filter_data<-df %>%
+            mutate(value=!!sym(input$metric_box),
+                   days_since=as.integer(date-first_case()))%>% 
+            filter(value>0,
+                   date>=as.Date("2020-04-01"),
+                   date<=as.Date("2020-04-30")) %>% 
+            group_by(state_name,days_since) %>% summarize(value=sum(value)) %>% 
+            select(days_since,value)
+        state_name<-c()
+        coef<-c()
+        lab<-c()
+        for(x in unique(filter_data$state_name)){
+            state_data<-filter_data %>% 
+                filter(state_name %in% x)
+            coefs<-lm(state_data$value~state_data$days_since)[[1]]
+            state_name<-c(state_name,x)
+            coef<-c(coef,coefs[[2]])
+            verbage<-ifelse(coefs[[2]]>0,"increase","decrease")
+            lab<-c(lab,paste(x,"averaged a",verbage,"of",as.integer(abs(coefs[[2]])),Proper(input$metric_box),"per day"))
+        }
+        
+       df2<-sp::merge(geo_states,data.frame(state_name,coef,lab),by.x="name",by.y="state_name",all=FALSE)
+
+       
+       pal <- colorQuantile(
+           palette = colorRampPalette(c('green', 'red'))(length(df2$coef)), 
+           domain = df2$coef)
+
+        leaflet(df2) %>% 
+            addTiles() %>% 
+            setView(-93, 42,3) %>%
+            addProviderTiles("MapBox", options = providerTileOptions(
+                id = "mapbox.light",
+                layerId = ~state_name,
+                accessToken = Sys.getenv('MAPBOX_ACCESS_TOKEN'))) %>% 
+            addPolygons(
+                layerId = ~state_name,
+                fillColor = ~pal(coef),
+                label = ~lab,
+                dashArray = "0",
+                color="white"
+                )
+    })
+    
     
     # 5. Create exp model ####
     model_data<-reactive({
@@ -287,11 +343,13 @@ server <- function(input, output,session) {
             filter(state_name %in% input$state_box |
                        is.null(input$state_box),
                    value>0,
-                   date>=as.Date("2020-04-01")) %>% 
+                   date>=as.Date("2020-04-01"),
+                   date<=as.Date("2020-04-30")) %>% 
             group_by(days_since) %>% summarize(value=sum(value)) %>% 
             select(days_since,value)
         #generate model for linear growth after stay at home order impact
         coefs<-lm(filter_data$value~filter_data$days_since)[[1]]
+
     })
     
     # 9. Create comparison table ####
@@ -338,7 +396,27 @@ server <- function(input, output,session) {
         else p
     })
     
-    
+    # observeEvent(input$corona_map_shape_click,{
+    #     clicked<-input$corona_map_shape_click$id
+    #     current<-input$state_box
+    #     if(clicked %in% input$state_box){
+    #         updateSelectInput(
+    #             session,
+    #             inputId="state_box",
+    #             label="Select State:",
+    #             choices = sort(unique(df$state_name)),
+    #             selected = current[current!=clicked]
+    #         )
+    #     }else{
+    #         updateSelectInput(
+    #             session,
+    #             inputId="state_box",
+    #             label="Select State:",
+    #             choices = sort(unique(df$state_name)),
+    #             selected = c(clicked,current)
+    #         )
+    #     }
+    # })
 }
 
 # Run the application 
